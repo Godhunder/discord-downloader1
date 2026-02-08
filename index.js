@@ -14,9 +14,15 @@ import fetch from "node-fetch";
 
 // --- CONFIG ---
 const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.BASE_URL || `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
+const BASE_URL = process.env.BASE_URL
+  ? process.env.BASE_URL
+  : process.env.RENDER_EXTERNAL_HOSTNAME
+    ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
+    : `http://localhost:${PORT}`;
 const FILE_EXPIRY_HOURS = 4;
 const SELF_PING_INTERVAL = 15 * 60 * 1000; // 15 min
+
+console.log("🌐 BASE_URL is:", BASE_URL);
 
 // --- EXPRESS SERVER ---
 const app = express();
