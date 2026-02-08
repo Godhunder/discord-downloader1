@@ -14,7 +14,7 @@ import fetch from "node-fetch";
 
 // --- CONFIG ---
 const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.BASE_URL || `https://your-app.onrender.com`;
+const BASE_URL = process.env.BASE_URL || `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
 const FILE_EXPIRY_HOURS = 4;
 const SELF_PING_INTERVAL = 15 * 60 * 1000; // 15 min
 
