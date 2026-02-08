@@ -15,10 +15,11 @@ import fetch from "node-fetch";
 // --- CONFIG ---
 const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL
-  ? process.env.BASE_URL
+  ? process.env.BASE_URL.replace(/\/$/, '') // remove trailing slash
   : process.env.RENDER_EXTERNAL_HOSTNAME
     ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
     : `http://localhost:${PORT}`;
+
 const FILE_EXPIRY_HOURS = 4;
 const SELF_PING_INTERVAL = 15 * 60 * 1000; // 15 min
 
@@ -41,7 +42,7 @@ const client = new Client({
 });
 
 let videoCache = {}; // store URLs per user
-let typeCache = {};  // store if user chose video/audio
+let typeCache = {};  // store type selection
 let queue = [];
 let busy = false;
 
@@ -60,7 +61,7 @@ client.on(Events.MessageCreate, async msg => {
 
   videoCache[msg.author.id] = url;
 
-  // Step 1: ask user to choose Video or Audio
+  // Step 1: select download type
   const menu = new StringSelectMenuBuilder()
     .setCustomId("select_type")
     .setPlaceholder("Choose download type")
@@ -83,13 +84,12 @@ client.on(Events.InteractionCreate, async interaction => {
   const url = videoCache[userId];
   if (!url) return interaction.reply("❌ URL expired, try again");
 
-  // Step 2: handle type selection
+  // --- Type selection ---
   if (interaction.customId === "select_type") {
     const selectedType = interaction.values[0];
     typeCache[userId] = selectedType;
 
     if (selectedType === "audio") {
-      // directly queue audio download
       queue.push({
         user: interaction.user,
         channel: interaction.channel,
@@ -99,16 +99,19 @@ client.on(Events.InteractionCreate, async interaction => {
       });
       await interaction.reply("🎵 Added to audio download queue");
       processQueue();
-    } else if (selectedType === "video") {
-      // fetch video qualities
+    }
+
+    if (selectedType === "video") {
       await interaction.reply("🔍 Fetching video qualities...");
+
       try {
         const info = await ytdlp(url, { dumpJson: true, skipDownload: true });
+
         const formats = info.formats
           .filter(f => f.vcodec !== "none" && f.height)
           .sort((a, b) => b.height - a.height)
           .map(f => ({
-            label: `${f.height}p ${f.fps || 30}fps`,
+            label: `${f.height}p ${f.fps || 30}fps ${f.filesize ? `(${(f.filesize / 1024 / 1024).toFixed(2)} MB)` : ''}`,
             value: f.format_id
           }))
           .slice(0, 25);
@@ -119,9 +122,10 @@ client.on(Events.InteractionCreate, async interaction => {
           .addOptions(formats);
 
         await interaction.followUp({
-          content: "🎥 Select video quality:",
+          content: "🎥 Select video quality (size included):",
           components: [new ActionRowBuilder().addComponents(qualityMenu)]
         });
+
       } catch (err) {
         console.error(err);
         await interaction.followUp("❌ Failed to fetch video formats");
@@ -129,7 +133,7 @@ client.on(Events.InteractionCreate, async interaction => {
     }
   }
 
-  // Step 3: handle video quality selection
+  // --- Quality selection ---
   if (interaction.customId === "select_quality") {
     const format = interaction.values[0];
     queue.push({
