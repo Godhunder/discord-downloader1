@@ -25,57 +25,83 @@ const BASE_URL = process.env.BASE_URL
     : `http://localhost:${PORT}`;
 
 const FILE_EXPIRY_HOURS = 4;
-const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-console.log("🚀 Discord Video Downloader Bot");
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-console.log(`🌐 BASE_URL: ${BASE_URL}`);
-console.log(`📁 Downloads expire: ${FILE_EXPIRY_HOURS} hours`);
-console.log(`🔧 Node version: ${process.version}`);
+console.log("=".repeat(50));
+console.log("🚀 DISCORD VIDEO DOWNLOADER BOT STARTING");
+console.log("=".repeat(50));
+console.log("📅 Start time:", new Date().toISOString());
+console.log("🌐 BASE_URL:", BASE_URL);
+console.log("🔧 Node version:", process.version);
+console.log("📦 Platform:", process.platform);
+console.log("=".repeat(50));
 
 // ============================================
 // EXPRESS WEB SERVER
 // ============================================
 const app = express();
 
-// Create downloads directory
 if (!fs.existsSync("downloads")) {
   fs.mkdirSync("downloads");
-  console.log("📁 Created downloads directory");
+  console.log("✅ Created downloads directory");
 }
 
-// Serve static files
 app.use("/downloads", express.static("downloads"));
 
-// Health check endpoint
+// Global bot status for health endpoint
+let botStatus = {
+  connected: false,
+  username: null,
+  loginAttempts: 0,
+  lastError: null
+};
+
 app.get("/", (req, res) => {
-  const uptime = Math.floor(process.uptime());
-  const hours = Math.floor(uptime / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-  
   res.json({
     status: "online",
-    bot: client.isReady() ? "connected" : "connecting",
-    uptime: `${hours}h ${minutes}m`,
+    bot: botStatus.connected ? "connected" : "connecting",
+    botUsername: botStatus.username,
+    loginAttempts: botStatus.loginAttempts,
+    lastError: botStatus.lastError,
+    uptime: `${Math.floor(process.uptime() / 60)}m`,
     downloads: fs.readdirSync("downloads").length,
     queue: queue.length,
     timestamp: new Date().toISOString()
   });
 });
 
-// Ping endpoint
 app.get("/ping", (req, res) => res.send("pong"));
 
-// Start server
+app.get("/debug", (req, res) => {
+  res.json({
+    tokenSet: !!process.env.TOKEN,
+    tokenLength: process.env.TOKEN ? process.env.TOKEN.length : 0,
+    botStatus: botStatus,
+    env: {
+      PORT: process.env.PORT,
+      BASE_URL: process.env.BASE_URL,
+      NODE_ENV: process.env.NODE_ENV
+    }
+  });
+});
+
 const server = app.listen(PORT, () => {
-  console.log(`✅ Web server running on port ${PORT}`);
-  console.log(`📊 Health check: ${BASE_URL}/`);
+  console.log("✅ Web server started on port", PORT);
+  console.log("📊 Health endpoint:", `${BASE_URL}/`);
+  console.log("🐛 Debug endpoint:", `${BASE_URL}/debug`);
 });
 
 // ============================================
 // DISCORD BOT SETUP
 // ============================================
+
+let videoCache = {};
+let queue = [];
+let busy = false;
+
+console.log("=".repeat(50));
+console.log("🤖 INITIALIZING DISCORD CLIENT");
+console.log("=".repeat(50));
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -84,28 +110,54 @@ const client = new Client({
   ]
 });
 
-let videoCache = {};
-let queue = [];
-let busy = false;
+console.log("✅ Discord client created with intents");
 
 // ============================================
 // BOT EVENT HANDLERS
 // ============================================
 
+client.on(Events.Debug, (info) => {
+  console.log("🐛 Discord Debug:", info);
+});
+
 client.once(Events.ClientReady, (c) => {
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log(`✅ Bot is ONLINE!`);
-  console.log(`📱 Logged in as: ${c.user.tag}`);
-  console.log(`🔧 Serving ${c.guilds.cache.size} server(s)`);
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("=".repeat(50));
+  console.log("✅✅✅ BOT IS ONLINE! ✅✅✅");
+  console.log("=".repeat(50));
+  console.log("📱 Username:", c.user.tag);
+  console.log("🆔 User ID:", c.user.id);
+  console.log("🔧 Servers:", c.guilds.cache.size);
+  console.log("=".repeat(50));
+  
+  botStatus.connected = true;
+  botStatus.username = c.user.tag;
 });
 
 client.on(Events.Error, (error) => {
-  console.error("❌ Discord client error:", error);
+  console.error("❌ Discord Error Event:", error);
+  botStatus.lastError = error.message;
 });
 
 client.on(Events.Warn, (info) => {
-  console.warn("⚠️ Discord warning:", info);
+  console.warn("⚠️ Discord Warning:", info);
+});
+
+client.on(Events.ShardError, (error) => {
+  console.error("❌ Shard Error:", error);
+  botStatus.lastError = `Shard: ${error.message}`;
+});
+
+client.on(Events.ShardDisconnect, (event) => {
+  console.log("🔌 Shard Disconnected:", event.code, event.reason);
+  botStatus.connected = false;
+});
+
+client.on(Events.ShardReconnecting, () => {
+  console.log("🔄 Shard Reconnecting...");
+});
+
+client.on(Events.ShardReady, (id) => {
+  console.log(`✅ Shard ${id} Ready`);
 });
 
 // ============================================
@@ -116,36 +168,33 @@ client.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot) return;
   if (!msg.content.startsWith("!dl")) return;
 
+  console.log(`📥 Command from ${msg.author.tag}: ${msg.content}`);
+
   const args = msg.content.trim().split(/\s+/);
   const url = args[1];
 
   if (!url) {
-    return msg.reply({
-      content: "❌ **Usage:** `!dl <video_url>`\n**Example:** `!dl https://youtube.com/watch?v=...`"
-    });
+    return msg.reply("❌ Usage: `!dl <video_url>`");
   }
 
-  // Validate URL
   try {
     new URL(url);
   } catch {
-    return msg.reply("❌ Invalid URL format. Please provide a valid link.");
+    return msg.reply("❌ Invalid URL");
   }
 
-  // Store URL for this user
   videoCache[msg.author.id] = url;
 
-  // Create type selection menu
   const menu = new StringSelectMenuBuilder()
     .setCustomId("select_type")
     .setPlaceholder("Choose download type")
     .addOptions([
-      { label: "🎥 Video", value: "video", description: "Download as video file" },
-      { label: "🎵 Audio", value: "audio", description: "Download as MP3 audio" }
+      { label: "🎥 Video", value: "video" },
+      { label: "🎵 Audio", value: "audio" }
     ]);
 
   await msg.channel.send({
-    content: `📥 **Download request from ${msg.author.username}**\nSelect download type:`,
+    content: "📥 Select download type:",
     components: [new ActionRowBuilder().addComponents(menu)]
   });
 });
@@ -161,17 +210,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const url = videoCache[userId];
 
   if (!url) {
-    return interaction.reply({
-      content: "❌ Session expired. Please use `!dl <url>` command again.",
-      ephemeral: true
-    });
+    return interaction.reply({ content: "❌ Session expired", ephemeral: true });
   }
 
-  // ===== TYPE SELECTION =====
   if (interaction.customId === "select_type") {
-    const selectedType = interaction.values[0];
+    const type = interaction.values[0];
 
-    if (selectedType === "audio") {
+    if (type === "audio") {
       queue.push({
         user: interaction.user,
         channel: interaction.channel,
@@ -179,20 +224,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         format: "bestaudio",
         type: "audio"
       });
-      await interaction.reply(`🎵 Added to audio download queue! Position: **${queue.length}**`);
+      await interaction.reply(`🎵 Added to queue! Position: ${queue.length}`);
       processQueue();
       return;
     }
 
-    if (selectedType === "video") {
-      await interaction.reply("🔍 Fetching available video qualities...");
+    if (type === "video") {
+      await interaction.reply("🔍 Fetching qualities...");
 
       try {
-        // Get video formats using yt-dlp
         const { stdout } = await execAsync(`yt-dlp -F "${url}"`);
         const lines = stdout.split("\n");
-        
-        // Parse formats
         const formats = [];
         const seen = new Set();
 
@@ -200,45 +242,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const match = line.match(/^(\d+)\s+.*?(\d+)p/);
           if (!match) continue;
 
-          const [, formatId, height] = match;
+          const [, id, height] = match;
           const fps = line.includes("60fps") ? "60fps" : "30fps";
           const label = `${height}p ${fps}`;
 
           if (!seen.has(label)) {
             seen.add(label);
-            formats.push({
-              label: label,
-              value: formatId
-            });
+            formats.push({ label, value: id });
           }
         }
 
-        if (formats.length === 0) {
-          return interaction.followUp("❌ No video formats found for this URL.");
+        if (!formats.length) {
+          return interaction.followUp("❌ No formats found");
         }
 
-        // Create quality selection menu (max 25 options)
-        const qualityMenu = new StringSelectMenuBuilder()
+        const menu = new StringSelectMenuBuilder()
           .setCustomId("select_quality")
-          .setPlaceholder("Choose video quality")
+          .setPlaceholder("Choose quality")
           .addOptions(formats.slice(0, 25));
 
         await interaction.followUp({
-          content: "🎥 **Select video quality:**",
-          components: [new ActionRowBuilder().addComponents(qualityMenu)]
+          content: "🎥 Select quality:",
+          components: [new ActionRowBuilder().addComponents(menu)]
         });
 
       } catch (err) {
         console.error("Format fetch error:", err);
-        await interaction.followUp("❌ Failed to fetch video formats. Make sure the URL is valid.");
+        await interaction.followUp("❌ Failed to fetch formats");
       }
     }
   }
 
-  // ===== QUALITY SELECTION =====
   if (interaction.customId === "select_quality") {
     const format = interaction.values[0];
-    
     queue.push({
       user: interaction.user,
       channel: interaction.channel,
@@ -246,8 +282,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       format,
       type: "video"
     });
-
-    await interaction.reply(`📥 Added to video download queue! Position: **${queue.length}**`);
+    await interaction.reply(`📥 Added to queue! Position: ${queue.length}`);
     processQueue();
   }
 });
@@ -258,92 +293,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 async function processQueue() {
   if (busy || queue.length === 0) return;
-
   busy = true;
+
   const job = queue.shift();
   const timestamp = Date.now();
   const ext = job.type === "audio" ? "mp3" : "mp4";
   const filename = `${job.type}_${timestamp}.${ext}`;
   const filepath = path.join("downloads", filename);
 
-  console.log(`⬇️ Processing ${job.type} download for ${job.user.username}`);
+  console.log(`⬇️ Processing ${job.type} for ${job.user.username}`);
 
-  await job.channel.send(`⬇️ Downloading ${job.type} for **${job.user.username}**...\n*This may take a few minutes.*`);
+  await job.channel.send(`⬇️ Downloading ${job.type}...`);
 
   try {
-    let command;
-
+    let cmd;
     if (job.type === "audio") {
-      // Download audio only and convert to MP3
-      command = `yt-dlp -f bestaudio --extract-audio --audio-format mp3 --audio-quality 192K -o "${filepath}" "${job.url}"`;
+      cmd = `yt-dlp -f bestaudio --extract-audio --audio-format mp3 -o "${filepath}" "${job.url}"`;
     } else {
-      // Download video with best audio and merge
-      command = `yt-dlp -f ${job.format}+bestaudio --merge-output-format mp4 -o "${filepath}" "${job.url}"`;
+      cmd = `yt-dlp -f ${job.format}+bestaudio --merge-output-format mp4 -o "${filepath}" "${job.url}"`;
     }
 
-    const { stderr } = await execAsync(command, {
-      maxBuffer: 50 * 1024 * 1024 // 50MB buffer
-    });
+    await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
 
-    if (stderr && stderr.includes("ERROR")) {
-      throw new Error(stderr);
-    }
-
-    // Check if file exists
     if (!fs.existsSync(filepath)) {
-      throw new Error("File was not created");
+      throw new Error("File not created");
     }
 
-    // Get file size
     const stats = fs.statSync(filepath);
     const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-    const sizeGB = (stats.size / (1024 * 1024 * 1024)).toFixed(2);
-    const sizeDisplay = sizeGB >= 1 ? `${sizeGB} GB` : `${sizeMB} MB`;
+    const link = `${BASE_URL}/downloads/${filename}`;
 
-    const downloadLink = `${BASE_URL}/downloads/${filename}`;
-
-    // Send success message
     await job.channel.send({
       embeds: [{
         color: 0x00ff00,
-        title: `✅ ${job.type === "audio" ? "Audio" : "Video"} Ready!`,
-        description: `Download complete for **${job.user.username}**`,
+        title: "✅ Download Ready!",
         fields: [
-          {
-            name: "📊 File Size",
-            value: sizeDisplay,
-            inline: true
-          },
-          {
-            name: "⏱️ Expires In",
-            value: `${FILE_EXPIRY_HOURS} hours`,
-            inline: true
-          },
-          {
-            name: "🔗 Download Link",
-            value: `[Click here to download](${downloadLink})`,
-            inline: false
-          }
+          { name: "📊 Size", value: `${sizeMB} MB`, inline: true },
+          { name: "⏱️ Expires", value: `${FILE_EXPIRY_HOURS}h`, inline: true },
+          { name: "🔗 Link", value: `[Download](${link})` }
         ],
-        footer: {
-          text: `Expires in ${FILE_EXPIRY_HOURS} hours • Auto-deleted`
-        },
-        timestamp: new Date().toISOString()
+        timestamp: new Date()
       }]
     });
 
-    console.log(`✅ ${job.type} download complete: ${filename} (${sizeDisplay})`);
-
-    // Cleanup cache
+    console.log(`✅ Download complete: ${filename}`);
     delete videoCache[job.user.id];
 
   } catch (err) {
-    console.error(`❌ Download failed for ${job.user.username}:`, err.message);
-    
-    await job.channel.send(
-      `❌ **Download failed for ${job.user.username}**\n` +
-      `*The URL might be invalid, geo-restricted, or the video is unavailable.*`
-    );
+    console.error("Download error:", err);
+    await job.channel.send(`❌ Download failed`);
   }
 
   busy = false;
@@ -351,97 +349,109 @@ async function processQueue() {
 }
 
 // ============================================
-// FILE CLEANUP
+// CLEANUP
 // ============================================
 
 setInterval(() => {
-  try {
-    const files = fs.readdirSync("downloads");
-    const now = Date.now();
-    let deletedCount = 0;
-
-    files.forEach((file) => {
-      const filepath = path.join("downloads", file);
-      const stats = fs.statSync(filepath);
-      const fileAge = now - stats.mtimeMs;
-
-      if (fileAge > FILE_EXPIRY_HOURS * 60 * 60 * 1000) {
-        fs.unlinkSync(filepath);
-        deletedCount++;
-        console.log(`🗑️ Deleted expired file: ${file}`);
-      }
-    });
-
-    if (deletedCount > 0) {
-      console.log(`🧹 Cleanup complete: ${deletedCount} file(s) removed`);
+  const now = Date.now();
+  fs.readdirSync("downloads").forEach((file) => {
+    const filepath = path.join("downloads", file);
+    const age = now - fs.statSync(filepath).mtimeMs;
+    if (age > FILE_EXPIRY_HOURS * 3600 * 1000) {
+      fs.unlinkSync(filepath);
+      console.log(`🗑️ Deleted: ${file}`);
     }
-  } catch (err) {
-    console.error("Cleanup error:", err);
-  }
-}, CLEANUP_INTERVAL_MS);
+  });
+}, 3600 * 1000);
 
 // ============================================
-// DISCORD LOGIN WITH ERROR HANDLING
+// DISCORD LOGIN WITH MAXIMUM DEBUGGING
 // ============================================
 
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-console.log("🔐 Attempting Discord login...");
+console.log("=".repeat(50));
+console.log("🔐 ATTEMPTING DISCORD LOGIN");
+console.log("=".repeat(50));
 
+// Check TOKEN
 if (!process.env.TOKEN) {
-  console.error("❌ FATAL ERROR: TOKEN environment variable not set!");
-  console.error("Please add your Discord bot token to environment variables.");
+  console.error("❌ TOKEN environment variable is NOT SET!");
+  console.error("💡 Add TOKEN in Render Environment tab");
+  botStatus.lastError = "TOKEN not set";
   process.exit(1);
 }
 
 const token = process.env.TOKEN.trim();
-console.log(`📝 Token found (${token.length} characters)`);
+console.log("✅ TOKEN found");
+console.log("📏 TOKEN length:", token.length, "characters");
+console.log("🔍 TOKEN starts with:", token.substring(0, 10) + "...");
+console.log("🔍 TOKEN has dots:", (token.match(/\./g) || []).length, "dots");
+
+if (token.length < 50) {
+  console.error("⚠️ TOKEN seems too short!");
+  console.error("💡 Discord tokens are usually 70+ characters");
+  botStatus.lastError = "TOKEN too short";
+}
+
+console.log("🔌 Calling client.login()...");
+botStatus.loginAttempts++;
 
 client.login(token)
+  .then(() => {
+    console.log("✅ Login promise resolved successfully!");
+  })
   .catch((error) => {
-    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.error("❌ DISCORD LOGIN FAILED!");
-    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.error("Error:", error.message);
+    console.error("=".repeat(50));
+    console.error("❌❌❌ LOGIN FAILED! ❌❌❌");
+    console.error("=".repeat(50));
+    console.error("Error code:", error.code);
+    console.error("Error message:", error.message);
+    console.error("Full error:", error);
+    console.error("=".repeat(50));
+    
+    botStatus.lastError = `${error.code}: ${error.message}`;
     
     if (error.code === "TokenInvalid") {
-      console.error("\n⚠️ INVALID TOKEN!");
-      console.error("1. Go to https://discord.com/developers/applications");
-      console.error("2. Select your app → Bot section");
-      console.error("3. Click 'Reset Token' and copy the new token");
-      console.error("4. Update TOKEN in environment variables");
-      console.error("5. Enable MESSAGE CONTENT INTENT!");
+      console.error("\n💡 TOKEN IS INVALID!");
+      console.error("1. Go to Discord Developer Portal");
+      console.error("2. Bot section → Reset Token");
+      console.error("3. Copy NEW token");
+      console.error("4. Update in Render Environment");
     } else if (error.code === "DisallowedIntents") {
-      console.error("\n⚠️ MISSING INTENTS!");
-      console.error("1. Go to Discord Developer Portal → Bot section");
-      console.error("2. Enable 'MESSAGE CONTENT INTENT'");
-      console.error("3. Enable 'SERVER MEMBERS INTENT'");
-      console.error("4. Save changes");
+      console.error("\n💡 INTENTS NOT ENABLED!");
+      console.error("1. Discord Developer Portal → Bot");
+      console.error("2. Enable MESSAGE CONTENT INTENT");
+      console.error("3. Save changes");
+    } else {
+      console.error("\n💡 UNKNOWN ERROR");
+      console.error("Check TOKEN and intents");
     }
     
-    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error("=".repeat(50));
     process.exit(1);
   });
 
-// ============================================
-// GRACEFUL SHUTDOWN
-// ============================================
+console.log("⏳ Waiting for Discord connection...");
 
+// Timeout check
+setTimeout(() => {
+  if (!botStatus.connected) {
+    console.error("=".repeat(50));
+    console.error("⏰ LOGIN TIMEOUT!");
+    console.error("=".repeat(50));
+    console.error("Bot has been trying to connect for 30 seconds");
+    console.error("This usually means:");
+    console.error("1. TOKEN is invalid");
+    console.error("2. MESSAGE CONTENT INTENT not enabled");
+    console.error("3. Network issues");
+    console.error("=".repeat(50));
+    botStatus.lastError = "Login timeout after 30s";
+  }
+}, 30000);
+
+// Graceful shutdown
 process.on("SIGTERM", () => {
-  console.log("\n👋 Received SIGTERM, shutting down gracefully...");
-  server.close(() => {
-    console.log("✅ HTTP server closed");
-    client.destroy();
-    console.log("✅ Discord client destroyed");
-    process.exit(0);
-  });
-});
-
-process.on("SIGINT", () => {
-  console.log("\n👋 Received SIGINT, shutting down gracefully...");
-  server.close(() => {
-    console.log("✅ HTTP server closed");
-    client.destroy();
-    console.log("✅ Discord client destroyed");
-    process.exit(0);
-  });
+  console.log("👋 Shutting down...");
+  server.close();
+  client.destroy();
+  process.exit(0);
 });
