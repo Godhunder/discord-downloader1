@@ -1,7 +1,7 @@
 {
   "name": "discord-downloader",
   "version": "2.0.0",
-  "description": "Discord bot for downloading videos with direct links",
+  "description": "Discord bot for downloading videos and audio with direct links",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -10,11 +10,19 @@
   "dependencies": {
     "discord.js": "^14.16.0",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "yt-dlp-exec": "^1.0.2",
-    "node-fetch": "^3.3.2"
+    "express": "^4.19.2"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "downloader",
+    "yt-dlp",
+    "video",
+    "audio"
+  ],
+  "author": "",
+  "license": "MIT"
 }
