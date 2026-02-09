@@ -7,7 +7,7 @@ import path from "path";
 
 const execAsync = promisify(exec);
 
-// ===================== CONFIG =====================
+// ================= CONFIG =================
 const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL
   ? process.env.BASE_URL.replace(/\/$/, '')
@@ -19,17 +19,18 @@ const FILE_EXPIRY_HOURS = 4;
 const SELF_PING_INTERVAL = 15 * 60 * 1000; // 15 min
 
 if (!fs.existsSync("downloads")) fs.mkdirSync("downloads");
-console.log("🌐 BASE_URL:", BASE_URL);
 
-// ===================== EXPRESS =====================
+// ================= EXPRESS =================
 import express from "express";
 const app = express();
 app.use("/downloads", express.static("downloads"));
+
 app.get("/", (req, res) => res.send("🤖 Bot online"));
 app.get("/ping", (req, res) => res.send("pong"));
+
 app.listen(PORT, () => console.log(`✅ Web server running on port ${PORT}`));
 
-// ===================== DISCORD =====================
+// ================= DISCORD =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -42,11 +43,7 @@ let videoCache = {};
 let queue = [];
 let busy = false;
 
-client.once(Events.ClientReady, c => {
-  console.log("✅ Bot online as", c.user.tag);
-});
-
-// ===================== COMMAND =====================
+// ================= COMMAND =================
 client.on(Events.MessageCreate, async msg => {
   if (msg.author.bot) return;
   if (!msg.content.startsWith("!dl")) return;
@@ -54,6 +51,7 @@ client.on(Events.MessageCreate, async msg => {
   const args = msg.content.split(" ");
   const url = args[1];
   if (!url) return msg.reply("❌ Usage: !dl <URL>");
+
   try { new URL(url); } catch { return msg.reply("❌ Invalid URL"); }
 
   videoCache[msg.author.id] = url;
@@ -69,28 +67,26 @@ client.on(Events.MessageCreate, async msg => {
   msg.channel.send({ content: "📥 Select download type:", components: [new ActionRowBuilder().addComponents(menu)] });
 });
 
-// ===================== INTERACTIONS =====================
+// ================= INTERACTIONS =================
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isStringSelectMenu()) return;
 
-  const userId = interaction.user.id;
-  const url = videoCache[userId];
+  const url = videoCache[interaction.user.id];
   if (!url) return interaction.reply({ content: "❌ Session expired", ephemeral: true });
 
-  // Type selection
+  // Audio or Video
   if (interaction.customId === "select_type") {
     const type = interaction.values[0];
 
     if (type === "audio") {
-      queue.push({ user: interaction.user, channel: interaction.channel, url, format: "bestaudio", type: "audio" });
-      await interaction.reply(`🎵 Added to audio queue (position ${queue.length})`);
+      queue.push({ user: interaction.user, channel: interaction.channel, url, type: "audio", format: "bestaudio" });
+      await interaction.reply(`🎵 Added to audio queue (#${queue.length})`);
       processQueue();
       return;
     }
 
     if (type === "video") {
       await interaction.reply("🔍 Fetching video formats...");
-
       try {
         const { stdout } = await execAsync(`yt-dlp -F "${url}"`);
         const lines = stdout.split("\n");
@@ -130,13 +126,13 @@ client.on(Events.InteractionCreate, async interaction => {
   // Quality selection
   if (interaction.customId === "select_quality") {
     const format = interaction.values[0];
-    queue.push({ user: interaction.user, channel: interaction.channel, url, format, type: "video" });
-    await interaction.reply(`📥 Added to video queue (position ${queue.length})`);
+    queue.push({ user: interaction.user, channel: interaction.channel, url, type: "video", format });
+    await interaction.reply(`📥 Added to video queue (#${queue.length})`);
     processQueue();
   }
 });
 
-// ===================== QUEUE PROCESSOR =====================
+// ================= QUEUE PROCESSOR =================
 async function processQueue() {
   if (busy || queue.length === 0) return;
   busy = true;
@@ -152,7 +148,7 @@ async function processQueue() {
   try {
     const cmd = job.type === "audio"
       ? `yt-dlp -f bestaudio --extract-audio --audio-format mp3 -o "${filepath}" "${job.url}"`
-      : `yt-dlp -f ${job.format}+bestaudio --merge-output-format mp4 -o "${filepath}" "${job.url}" "${job.url}"`;
+      : `yt-dlp -f ${job.format}+bestaudio --merge-output-format mp4 -o "${filepath}" "${job.url}"`;
 
     await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
 
@@ -186,7 +182,7 @@ async function processQueue() {
   processQueue();
 }
 
-// ===================== CLEANUP =====================
+// ================= CLEANUP =================
 setInterval(() => {
   const now = Date.now();
   fs.readdirSync("downloads").forEach(file => {
@@ -198,7 +194,7 @@ setInterval(() => {
   });
 }, 3600 * 1000);
 
-// ===================== SELF-PING =====================
+// ================= SELF-PING =================
 setInterval(async () => {
   try {
     await fetch(BASE_URL);
@@ -208,16 +204,19 @@ setInterval(async () => {
   }
 }, SELF_PING_INTERVAL);
 
-// ===================== LOGIN =====================
+// ================= DISCORD LOGIN =================
 if (!process.env.TOKEN) {
   console.error("❌ TOKEN not set! Add TOKEN in Render environment variables.");
   process.exit(1);
 }
 
-const token = process.env.TOKEN.trim();
-client.login(token)
+client.login(process.env.TOKEN)
   .then(() => console.log("✅ Login promise resolved"))
   .catch(err => {
     console.error("❌ LOGIN FAILED:", err.message);
     process.exit(1);
   });
+
+client.on("ready", () => {
+  console.log(`🤖 Bot online as ${client.user.tag}`);
+});
