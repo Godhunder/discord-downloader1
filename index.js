@@ -4,8 +4,6 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
 import path from "path";
-import express from "express";
-import fetch from "node-fetch";
 
 const execAsync = promisify(exec);
 
@@ -20,28 +18,30 @@ const BASE_URL = process.env.BASE_URL
 const FILE_EXPIRY_HOURS = 4;
 const SELF_PING_INTERVAL = 15 * 60 * 1000; // 15 min
 
+if (!fs.existsSync("downloads")) fs.mkdirSync("downloads");
 console.log("🌐 BASE_URL:", BASE_URL);
 
 // ===================== EXPRESS =====================
+import express from "express";
 const app = express();
-if (!fs.existsSync("downloads")) fs.mkdirSync("downloads");
 app.use("/downloads", express.static("downloads"));
-
 app.get("/", (req, res) => res.send("🤖 Bot online"));
 app.get("/ping", (req, res) => res.send("pong"));
-
 app.listen(PORT, () => console.log(`✅ Web server running on port ${PORT}`));
 
 // ===================== DISCORD =====================
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 let videoCache = {};
 let queue = [];
 let busy = false;
 
-// Bot ready
 client.once(Events.ClientReady, c => {
   console.log("✅ Bot online as", c.user.tag);
 });
@@ -54,7 +54,6 @@ client.on(Events.MessageCreate, async msg => {
   const args = msg.content.split(" ");
   const url = args[1];
   if (!url) return msg.reply("❌ Usage: !dl <URL>");
-
   try { new URL(url); } catch { return msg.reply("❌ Invalid URL"); }
 
   videoCache[msg.author.id] = url;
@@ -153,7 +152,7 @@ async function processQueue() {
   try {
     const cmd = job.type === "audio"
       ? `yt-dlp -f bestaudio --extract-audio --audio-format mp3 -o "${filepath}" "${job.url}"`
-      : `yt-dlp -f ${job.format}+bestaudio --merge-output-format mp4 -o "${filepath}" "${job.url}"`;
+      : `yt-dlp -f ${job.format}+bestaudio --merge-output-format mp4 -o "${filepath}" "${job.url}" "${job.url}"`;
 
     await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
 
